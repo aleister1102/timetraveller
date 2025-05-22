@@ -52,8 +52,16 @@ func main() {
 	requestTimeoutMsFlag = flag.Int("to", 10000, "Timeout for each HTTP request in milliseconds")
 	noErrorFilterFlag = flag.Bool("no-err", false, "Filter out 'not found' and error results")
 	delayMsFlag = flag.Int("d", 0, "Delay in milliseconds between each request sent by a worker")
-	latestSnapshotFlag = flag.Bool("latest", false, "Get the latest snapshot instead of the oldest") // Default false
+	latestSnapshotFlag = flag.Bool("latest", false, "Get the latest snapshot instead of the oldest")
 
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: timetraveller [options] <url1> [url2 ...]\n")
+		fmt.Fprintf(os.Stderr, "Options:\n")
+		flag.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nOr pipe URLs:\n")
+		fmt.Fprintf(os.Stderr, "  echo <url> | timetraveller [options]\n")
+		fmt.Fprintf(os.Stderr, "  cat list_of_urls.txt | timetraveller [options]\n")
+	}
 	flag.Parse()
 
 	urlsToCheck := flag.Args()
@@ -74,12 +82,8 @@ func main() {
 	}
 
 	if len(urlsToCheck) == 0 {
-		fmt.Println("Usage: timetraveller [options] <url1> [url2 ...]")
-		fmt.Println("Options:")
-		flag.PrintDefaults()
-		fmt.Println("\nOr pipe URLs:")
-		fmt.Println("  echo <url> | timetraveller [options]")
-		fmt.Println("  cat list_of_urls.txt | timetraveller [options]")
+		// Banner is already printed. Now print usage.
+		flag.Usage()
 		os.Exit(1)
 	}
 
