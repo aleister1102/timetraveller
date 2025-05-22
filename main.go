@@ -43,12 +43,14 @@ var (
 	numWorkersFlag       *int
 	requestTimeoutMsFlag *int
 	noErrorFilterFlag    *bool
+	delayMsFlag          *int // New flag for delay
 )
 
 func main() {
 	numWorkersFlag = flag.Int("t", 10, "Number of concurrent goroutines (threads)")
 	requestTimeoutMsFlag = flag.Int("to", 10000, "Timeout for each HTTP request in milliseconds")
-	noErrorFilterFlag = flag.Bool("no-err", false, "Filter out (do not display) 'not found' results")
+	noErrorFilterFlag = flag.Bool("no-err", false, "Filter out 'not found' and error results")
+	delayMsFlag = flag.Int("d", 0, "Delay in milliseconds between each request sent by a worker") // Default 0ms
 
 	flag.Parse()
 
@@ -73,7 +75,7 @@ func main() {
 		fmt.Println("Usage: timetraveller [options] <url1> [url2 ...]")
 		fmt.Println("Options:")
 		flag.PrintDefaults()
-		fmt.Println(" Or pipe URLs:")
+		fmt.Println("\nOr pipe URLs:")
 		fmt.Println("  echo <url> | timetraveller [options]")
 		fmt.Println("  cat list_of_urls.txt | timetraveller [options]")
 		os.Exit(1)
@@ -90,10 +92,11 @@ func main() {
 	// Start workers
 	for i := 0; i < *numWorkersFlag; i++ {
 		wg.Add(1)
-		go worker(i+1, httpClient, jobs, resultsChan, &wg)
+		// Pass delayMsFlag to the worker
+		go worker(i+1, httpClient, jobs, resultsChan, &wg, *delayMsFlag)
 	}
 
-	// Send jobs
+	// Send jobs (no delay needed here as workers will handle it)
 	for _, u := range urlsToCheck {
 		jobs <- u
 	}
@@ -139,11 +142,16 @@ func main() {
 	}
 }
 
-func worker(id int, client *http.Client, urls <-chan string, results chan<- ProcessResult, wg *sync.WaitGroup) {
+func worker(id int, client *http.Client, urls <-chan string, results chan<- ProcessResult, wg *sync.WaitGroup, delayMs int) {
 	defer wg.Done()
 	for targetURL := range urls {
-		// fmt.Printf("Worker %d processing %s", id, targetURL) // Optional: for debugging
+		// fmt.Printf("Worker %d processing %s\n", id, targetURL) // Optional: for debugging
 		results <- fetchURLData(client, targetURL)
+
+		// Apply delay if specified
+		if delayMs > 0 {
+			time.Sleep(time.Duration(delayMs) * time.Millisecond)
+		}
 	}
 }
 
