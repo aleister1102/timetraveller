@@ -32,7 +32,18 @@ TimeTraveller is a command-line tool to interact with the Wayback Machine (archi
     ```
     This will create a `timetraveller` (or `timetraveller.exe` on Windows) executable in the current directory.
 
-## 🚀 Usage
+### Install from GitHub (using `go install`)
+
+If you have Go installed and configured correctly (specifically, your `GOPATH/bin` or `GOBIN` directory is in your system's `PATH`), you can install TimeTraveller directly from GitHub:
+
+```shell
+go install github.com/aleister1102/timetraveller/timetraveller@latest
+```
+
+**Note:** Replace `aleister1102/timetraveller` with the actual path to your repository if it's hosted on GitHub. If it's a local project not yet on GitHub, this method won't apply until it is.
+After installation, the `timetraveller` binary should be available globally in your terminal.
+
+## �� Usage
 
 ```
 ./timetraveller [options] <url1> [url2 ...]
