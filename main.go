@@ -43,14 +43,16 @@ var (
 	numWorkersFlag       *int
 	requestTimeoutMsFlag *int
 	noErrorFilterFlag    *bool
-	delayMsFlag          *int // New flag for delay
+	delayMsFlag          *int  // New flag for delay
+	latestSnapshotFlag   *bool // New flag for latest snapshot
 )
 
 func main() {
 	numWorkersFlag = flag.Int("t", 10, "Number of concurrent goroutines (threads)")
 	requestTimeoutMsFlag = flag.Int("to", 10000, "Timeout for each HTTP request in milliseconds")
 	noErrorFilterFlag = flag.Bool("no-err", false, "Filter out 'not found' and error results")
-	delayMsFlag = flag.Int("d", 0, "Delay in milliseconds between each request sent by a worker") // Default 0ms
+	delayMsFlag = flag.Int("d", 0, "Delay in milliseconds between each request sent by a worker")
+	latestSnapshotFlag = flag.Bool("latest", false, "Get the latest snapshot instead of the oldest") // Default false
 
 	flag.Parse()
 
@@ -92,17 +94,15 @@ func main() {
 	// Start workers
 	for i := 0; i < *numWorkersFlag; i++ {
 		wg.Add(1)
-		// Pass delayMsFlag to the worker
 		go worker(i+1, httpClient, jobs, resultsChan, &wg, *delayMsFlag)
 	}
 
-	// Send jobs (no delay needed here as workers will handle it)
+	// Send jobs
 	for _, u := range urlsToCheck {
 		jobs <- u
 	}
 	close(jobs)
 
-	// Collect results in a separate goroutine to close resultsChan once all workers are done
 	go func() {
 		wg.Wait()
 		close(resultsChan)
@@ -110,7 +110,6 @@ func main() {
 
 	// Process and print results
 	for result := range resultsChan {
-		// Unified check for -no-err flag
 		if *noErrorFilterFlag {
 			if result.Error != nil {
 				continue
@@ -121,6 +120,10 @@ func main() {
 		}
 
 		var outputLine string
+		label := "Oldest:"
+		if *latestSnapshotFlag {
+			label = "Latest:"
+		}
 
 		if result.Error != nil {
 			outputLine = fmt.Sprintf(ColorRed+"[!] %s - %v"+ColorReset,
@@ -128,13 +131,13 @@ func main() {
 		} else {
 			switch result.Status {
 			case "found":
-				outputLine = fmt.Sprintf(ColorGreen+"[+] %s - Snapshots: %d - Oldest: %s"+ColorReset,
-					result.URL, result.SnapshotCount, result.OldestURL)
+				outputLine = fmt.Sprintf(ColorGreen+"[+] %s - Snapshots: %d - %s %s"+ColorReset,
+					result.URL, result.SnapshotCount, label, result.OldestURL)
 			case "not found":
 				outputLine = fmt.Sprintf(ColorYellow+"[-] %s"+ColorReset,
 					result.URL)
-			default: // Should not happen, but good for a fallback
-				outputLine = fmt.Sprintf(ColorCyan+"[i] %s - Status: %s (Unknown)"+ColorReset, // Retain status for unknown case
+			default:
+				outputLine = fmt.Sprintf(ColorCyan+"[i] %s - Status: %s (Unknown)"+ColorReset,
 					result.URL, result.Status)
 			}
 		}
@@ -145,19 +148,15 @@ func main() {
 func worker(id int, client *http.Client, urls <-chan string, results chan<- ProcessResult, wg *sync.WaitGroup, delayMs int) {
 	defer wg.Done()
 	for targetURL := range urls {
-		// fmt.Printf("Worker %d processing %s\n", id, targetURL) // Optional: for debugging
-		results <- fetchURLData(client, targetURL)
-
-		// Apply delay if specified
+		results <- fetchURLData(client, targetURL, *latestSnapshotFlag)
 		if delayMs > 0 {
 			time.Sleep(time.Duration(delayMs) * time.Millisecond)
 		}
 	}
 }
 
-// fetchURLData processes a single URL and returns its ProcessResult.
-// (Previously processURL, now returns a struct instead of printing)
-func fetchURLData(client *http.Client, targetURL string) ProcessResult {
+// Modify fetchURLData to accept latest flag and act accordingly
+func fetchURLData(client *http.Client, targetURL string, latest bool) ProcessResult {
 	result := ProcessResult{URL: targetURL}
 
 	apiURL, err := url.Parse(cdxAPIURL)
@@ -189,7 +188,7 @@ func fetchURLData(client *http.Client, targetURL string) ProcessResult {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body) // Read body for context
+		bodyBytes, _ := io.ReadAll(resp.Body)
 		result.Status = "error"
 		result.Error = fmt.Errorf("API request failed. Status: %s, Body: %s", resp.Status, string(bodyBytes))
 		return result
@@ -198,7 +197,7 @@ func fetchURLData(client *http.Client, targetURL string) ProcessResult {
 	var cdxResponse [][]interface{}
 	decoder := json.NewDecoder(resp.Body)
 	if err := decoder.Decode(&cdxResponse); err != nil {
-		if err == io.EOF || (len(cdxResponse) == 0) { // Empty response or no actual data rows
+		if err == io.EOF || (len(cdxResponse) == 0) {
 			result.Status = "not found"
 			return result
 		}
@@ -208,12 +207,11 @@ func fetchURLData(client *http.Client, targetURL string) ProcessResult {
 	}
 
 	var snapshots []SnapshotEntry
-	if len(cdxResponse) > 1 { // cdxResponse[0] is header
+	if len(cdxResponse) > 1 {
 		for _, entryData := range cdxResponse[1:] {
 			snapshots = append(snapshots, SnapshotEntry(entryData))
 		}
 	} else if len(cdxResponse) == 1 && len(cdxResponse[0]) > 0 {
-		// This case handles when API returns only header, meaning no actual snapshots for status:200
 		result.Status = "not found"
 		return result
 	}
@@ -224,18 +222,24 @@ func fetchURLData(client *http.Client, targetURL string) ProcessResult {
 		result.Status = "found"
 		result.SnapshotCount = snapshotCount
 
-		oldestEntry := snapshots[0]
-		if len(oldestEntry) > 2 { // Need at least timestamp (idx 1) and original URL (idx 2)
-			timestamp, tsOk := oldestEntry[1].(string)
-			originalURL, origOk := oldestEntry[2].(string)
+		var chosenEntry SnapshotEntry
+		if latest && len(snapshots) > 0 {
+			chosenEntry = snapshots[len(snapshots)-1] // Get the last snapshot for "latest"
+		} else if len(snapshots) > 0 {
+			chosenEntry = snapshots[0] // Default to the first snapshot (oldest)
+		} else {
+			result.Status = "not found" // Should be caught earlier, but defensive
+			return result
+		}
+
+		if len(chosenEntry) > 2 {
+			timestamp, tsOk := chosenEntry[1].(string)
+			originalURL, origOk := chosenEntry[2].(string)
 
 			if tsOk && origOk {
 				result.OldestURL = fmt.Sprintf("http://web.archive.org/web/%s/%s", timestamp, originalURL)
 			} else {
-				// Log this server-side if possible, or return a more specific error for the user.
-				// For now, mark as unable to determine.
 				result.OldestURL = "could not determine (error parsing snapshot data)"
-				// Optionally, set result.Error here or change status.
 			}
 		} else {
 			result.OldestURL = "could not determine (not enough fields in snapshot data)"
