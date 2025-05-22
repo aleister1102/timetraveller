@@ -36,7 +36,7 @@ TimeTraveller is a command-line tool to interact with the Wayback Machine (archi
 ### Install from GitHub
 
 ```shell
-go install github.com/aleister1102/timetraveller
+go install github.com/aleister1102/timetraveller@latest
 ```
 
 ## Usage
