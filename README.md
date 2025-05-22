@@ -1,23 +1,23 @@
-# TimeTraveller
+# 🕰️ TimeTraveller
 
 TimeTraveller is a command-line tool to interact with the Wayback Machine (archive.org) CDX API. It allows you to check for archived snapshots of one or more URLs, retrieve the count of available snapshots, and get a link to the oldest or newest one.
 
-## Features
+## ✨ Features
 
-- Check single or multiple URLs.
-- Accept URLs from command-line arguments or piped via stdin.
-- Display count of snapshots and link to the **oldest or newest** snapshot for found URLs.
-- Customizable number of concurrent workers (threads).
-- Customizable timeout for HTTP requests.
-- Optional delay between requests to be polite to the API.
-- Filter out "not found" and error results.
-- Colored output for easy readability.
+-   ✅ Check single or multiple URLs.
+-    Piping accepted: Accept URLs from command-line arguments or piped via stdin.
+-   🔢 Display count of snapshots and link to the **oldest or newest** snapshot for found URLs.
+-   ⚙️ Customizable number of concurrent workers (threads).
+-   ⏱️ Customizable timeout for HTTP requests.
+-   ⏳ Optional delay between requests to be polite to the API.
+-   🗑️ Filter out "not found" and error results.
+-   🌈 Colored output for easy readability.
 
-## Installation
+## 🛠️ Installation
 
 ### Prerequisites
 
-- Go (version 1.16 or later recommended).
+-   Go (version 1.16 or later recommended).
 
 ### Building from source
 
@@ -32,14 +32,7 @@ TimeTraveller is a command-line tool to interact with the Wayback Machine (archi
     ```
     This will create a `timetraveller` (or `timetraveller.exe` on Windows) executable in the current directory.
 
-
-### Install from GitHub
-
-```shell
-go install github.com/aleister1102/timetraveller@latest
-```
-
-## Usage
+## 🚀 Usage
 
 ```
 ./timetraveller [options] <url1> [url2 ...]
@@ -54,7 +47,7 @@ cat list_of_urls.txt | ./timetraveller [options]
 
 (Where `list_of_urls.txt` contains one URL per line)
 
-### Options
+### ⚙️ Options
 
 ```
   -d int
@@ -69,7 +62,7 @@ cat list_of_urls.txt | ./timetraveller [options]
     	Timeout for each HTTP request in milliseconds (default 10000)
 ```
 
-### Output Format
+### 🎨 Output Format
 
 The tool uses colored prefixes to indicate the status:
 
@@ -80,7 +73,7 @@ The tool uses colored prefixes to indicate the status:
 
 If the `-no-err` flag is used, only `[+]` results will be shown.
 
-### Examples
+### 📝 Examples
 
 1.  **Check a single URL (gets oldest snapshot by default):**
     ```bash
@@ -109,6 +102,6 @@ If the `-no-err` flag is used, only `[+]` results will be shown.
     Output might be:
     `[!] non_existent_domain_for_timeout.com - context deadline exceeded (Client.Timeout exceeded while awaiting headers)`
 
-## Contributing
+## 🤝 Contributing
 
 Feel free to open issues or submit pull requests if you have suggestions or find bugs. 
