@@ -11,21 +11,52 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
+	"time"
 )
 
-const cdxAPIURL = "http://web.archive.org/cdx/search/cdx"
+const (
+	cdxAPIURL = "http://web.archive.org/cdx/search/cdx"
 
-// Structure to hold a part of the CDX API response
-// urlkey, timestamp, original, mimetype, statuscode, digest, length
-// We only care about timestamp (index 1) and original (index 2) for status 200
+	// ANSI Color Codes
+	ColorReset  = "\033[0m"
+	ColorRed    = "\033[31m"
+	ColorGreen  = "\033[32m"
+	ColorYellow = "\033[33m"
+	ColorBlue   = "\033[34m"
+	ColorCyan   = "\033[36m"
+)
+
+// SnapshotEntry defines the structure of a single entry from CDX API (partially).
 type SnapshotEntry []interface{}
 
+// ProcessResult holds the outcome of processing a single URL.
+type ProcessResult struct {
+	URL           string
+	Status        string // "found", "not found", "error"
+	SnapshotCount int
+	OldestURL     string
+	Error         error // Holds any error encountered during processing
+}
+
+var (
+	numWorkersFlag       *int
+	requestTimeoutMsFlag *int
+	noErrorFilterFlag    *bool
+)
+
 func main() {
+	numWorkersFlag = flag.Int("t", 10, "Number of concurrent goroutines (threads)")
+	requestTimeoutMsFlag = flag.Int("to", 10000, "Timeout for each HTTP request in milliseconds")
+	noErrorFilterFlag = flag.Bool("no-err", false, "Filter out (do not display) 'not found' results")
+
 	flag.Parse()
+
 	urlsToCheck := flag.Args()
 
+	// Read from stdin if no args are provided and data is piped
 	stat, _ := os.Stdin.Stat()
-	if (stat.Mode() & os.ModeCharDevice) == 0 { // Check if data is being piped
+	if len(urlsToCheck) == 0 && (stat.Mode()&os.ModeCharDevice) == 0 {
 		scanner := bufio.NewScanner(os.Stdin)
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
@@ -39,116 +70,170 @@ func main() {
 	}
 
 	if len(urlsToCheck) == 0 {
-		fmt.Println("Usage:")
-		fmt.Println("  timetraveller <url1> [url2 ...]")
-		fmt.Println("  echo <url> | timetraveller")
-		fmt.Println("  cat list_of_urls.txt | timetraveller")
+		fmt.Println("Usage: timetraveller [options] <url1> [url2 ...]")
+		fmt.Println("Options:")
+		flag.PrintDefaults()
+		fmt.Println(" Or pipe URLs:")
+		fmt.Println("  echo <url> | timetraveller [options]")
+		fmt.Println("  cat list_of_urls.txt | timetraveller [options]")
 		os.Exit(1)
 	}
 
-	httpClient := &http.Client{}
+	httpClient := &http.Client{
+		Timeout: time.Duration(*requestTimeoutMsFlag) * time.Millisecond,
+	}
 
+	jobs := make(chan string, len(urlsToCheck))
+	resultsChan := make(chan ProcessResult, len(urlsToCheck))
+	var wg sync.WaitGroup
+
+	// Start workers
+	for i := 0; i < *numWorkersFlag; i++ {
+		wg.Add(1)
+		go worker(i+1, httpClient, jobs, resultsChan, &wg)
+	}
+
+	// Send jobs
 	for _, u := range urlsToCheck {
-		fmt.Printf("Checking: %s\n", u)
-		processURL(httpClient, u)
-		fmt.Println() // Add a blank line for readability
+		jobs <- u
+	}
+	close(jobs)
+
+	// Collect results in a separate goroutine to close resultsChan once all workers are done
+	go func() {
+		wg.Wait()
+		close(resultsChan)
+	}()
+
+	// Process and print results
+	for result := range resultsChan {
+		// Unified check for -no-err flag
+		if *noErrorFilterFlag {
+			if result.Error != nil {
+				continue
+			}
+			if result.Status == "not found" {
+				continue
+			}
+		}
+
+		var outputLine string
+
+		if result.Error != nil {
+			outputLine = fmt.Sprintf(ColorRed+"[!] %s - %v"+ColorReset,
+				result.URL, result.Error)
+		} else {
+			switch result.Status {
+			case "found":
+				outputLine = fmt.Sprintf(ColorGreen+"[+] %s - Snapshots: %d - Oldest: %s"+ColorReset,
+					result.URL, result.SnapshotCount, result.OldestURL)
+			case "not found":
+				outputLine = fmt.Sprintf(ColorYellow+"[-] %s"+ColorReset,
+					result.URL)
+			default: // Should not happen, but good for a fallback
+				outputLine = fmt.Sprintf(ColorCyan+"[i] %s - Status: %s (Unknown)"+ColorReset, // Retain status for unknown case
+					result.URL, result.Status)
+			}
+		}
+		fmt.Println(outputLine)
 	}
 }
 
-func processURL(client *http.Client, targetURL string) {
-	// Construct the CDX API URL
+func worker(id int, client *http.Client, urls <-chan string, results chan<- ProcessResult, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for targetURL := range urls {
+		// fmt.Printf("Worker %d processing %s", id, targetURL) // Optional: for debugging
+		results <- fetchURLData(client, targetURL)
+	}
+}
+
+// fetchURLData processes a single URL and returns its ProcessResult.
+// (Previously processURL, now returns a struct instead of printing)
+func fetchURLData(client *http.Client, targetURL string) ProcessResult {
+	result := ProcessResult{URL: targetURL}
+
 	apiURL, err := url.Parse(cdxAPIURL)
 	if err != nil {
-		log.Printf("Error parsing base API URL: %v", err)
-		fmt.Println("  Status: error constructing API URL")
-		return
+		result.Status = "error"
+		result.Error = fmt.Errorf("error parsing base API URL: %w", err)
+		return result
 	}
 
 	query := apiURL.Query()
 	query.Set("url", targetURL)
 	query.Set("output", "json")
-	query.Set("filter", "statuscode:200") // Filter for successful snapshots
+	query.Set("filter", "statuscode:200")
 	apiURL.RawQuery = query.Encode()
 
 	req, err := http.NewRequest("GET", apiURL.String(), nil)
 	if err != nil {
-		log.Printf("Error creating request for %s: %v", targetURL, err)
-		fmt.Println("  Status: error creating request")
-		return
+		result.Status = "error"
+		result.Error = fmt.Errorf("error creating request: %w", err)
+		return result
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("Error fetching data for %s: %v", targetURL, err)
-		fmt.Println("  Status: error fetching data")
-		return
+		result.Status = "error"
+		result.Error = fmt.Errorf("error fetching data: %w", err)
+		return result
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		log.Printf("API request failed for %s. Status: %s, Body: %s", targetURL, resp.Status, string(bodyBytes))
-		fmt.Printf("  Status: API error (%s)\n", resp.Status)
-		return
+		bodyBytes, _ := io.ReadAll(resp.Body) // Read body for context
+		result.Status = "error"
+		result.Error = fmt.Errorf("API request failed. Status: %s, Body: %s", resp.Status, string(bodyBytes))
+		return result
 	}
 
-	var cdxResponse [][]interface{} // The response is a JSON array of arrays
+	var cdxResponse [][]interface{}
 	decoder := json.NewDecoder(resp.Body)
 	if err := decoder.Decode(&cdxResponse); err != nil {
-		// Handle cases where the response might not be a valid JSON array,
-		// e.g. empty response for a URL never archived or malformed.
-		if err == io.EOF { // Empty response is not an error, just means no snapshots
-			fmt.Println("  Status: not found")
-			return
+		if err == io.EOF || (len(cdxResponse) == 0) { // Empty response or no actual data rows
+			result.Status = "not found"
+			return result
 		}
-		// Attempt to read the body to see if it's an error message from Wayback
-		// Reset reader and try to read as plain text if JSON parsing fails
-		// This part is tricky because the body might have been partially consumed.
-		// For simplicity, we'll just log the JSON parsing error.
-		log.Printf("Error decoding JSON for %s: %v", targetURL, err)
-		fmt.Println("  Status: error decoding response")
-		return
+		result.Status = "error"
+		result.Error = fmt.Errorf("error decoding JSON response: %w", err)
+		return result
 	}
 
-	// The first element of cdxResponse is the header row, e.g. ["urlkey","timestamp","original","mimetype","statuscode","digest","length"]
-	// We need to skip it if it exists and the response is not empty.
 	var snapshots []SnapshotEntry
-	if len(cdxResponse) > 1 {
-		for _, entry := range cdxResponse[1:] { // Skip header row
-			snapshots = append(snapshots, SnapshotEntry(entry))
+	if len(cdxResponse) > 1 { // cdxResponse[0] is header
+		for _, entryData := range cdxResponse[1:] {
+			snapshots = append(snapshots, SnapshotEntry(entryData))
 		}
+	} else if len(cdxResponse) == 1 && len(cdxResponse[0]) > 0 {
+		// This case handles when API returns only header, meaning no actual snapshots for status:200
+		result.Status = "not found"
+		return result
 	}
 
 	snapshotCount := len(snapshots)
 
 	if snapshotCount > 0 {
-		fmt.Println("  Status: found")
-		fmt.Printf("  Snapshots: %d\n", snapshotCount)
+		result.Status = "found"
+		result.SnapshotCount = snapshotCount
 
-		// The first snapshot in the filtered list (cdxResponse[1]) should be the oldest
-		// because CDX server sorts by timestamp by default.
-		oldestEntry := snapshots[0] // This is cdxResponse[1] effectively
-
-		// Ensure the entry has enough elements before trying to access them
-		// Indexes: 1 for timestamp, 2 for original URL
-		if len(oldestEntry) > 2 {
+		oldestEntry := snapshots[0]
+		if len(oldestEntry) > 2 { // Need at least timestamp (idx 1) and original URL (idx 2)
 			timestamp, tsOk := oldestEntry[1].(string)
 			originalURL, origOk := oldestEntry[2].(string)
 
 			if tsOk && origOk {
-				waybackURL := fmt.Sprintf("http://web.archive.org/web/%s/%s", timestamp, originalURL)
-				fmt.Printf("  Oldest: %s\n", waybackURL)
+				result.OldestURL = fmt.Sprintf("http://web.archive.org/web/%s/%s", timestamp, originalURL)
 			} else {
-				log.Printf("Error parsing oldest snapshot data for %s: Timestamp or Original URL missing or not strings. Entry: %+v", targetURL, oldestEntry)
-				fmt.Println("  Oldest: could not determine (error parsing snapshot data)")
+				// Log this server-side if possible, or return a more specific error for the user.
+				// For now, mark as unable to determine.
+				result.OldestURL = "could not determine (error parsing snapshot data)"
+				// Optionally, set result.Error here or change status.
 			}
 		} else {
-			log.Printf("Error parsing oldest snapshot data for %s: Not enough fields in entry. Entry: %+v", targetURL, oldestEntry)
-			fmt.Println("  Oldest: could not determine (not enough fields in snapshot data)")
+			result.OldestURL = "could not determine (not enough fields in snapshot data)"
 		}
-
 	} else {
-		// This case might also be hit if cdxResponse was empty or only had a header
-		fmt.Println("  Status: not found")
+		result.Status = "not found"
 	}
+	return result
 }
