@@ -32,6 +32,13 @@ TimeTraveller is a command-line tool to interact with the Wayback Machine (archi
     ```
     This will create a `timetraveller` (or `timetraveller.exe` on Windows) executable in the current directory.
 
+
+### Install from GitHub
+
+```shell
+go install github.com/aleister1102/timetraveller
+```
+
 ## Usage
 
 ```
