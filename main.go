@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	cdxAPIURL = "http://web.archive.org/cdx/search/cdx"
+	cdxAPIURL = "https://web.archive.org/cdx/search/cdx"
 
 	// ANSI Color Codes
 	ColorReset  = "\033[0m"
