@@ -43,8 +43,10 @@ var (
 	numWorkersFlag       *int
 	requestTimeoutMsFlag *int
 	noErrorFilterFlag    *bool
-	delayMsFlag          *int  // New flag for delay
-	latestSnapshotFlag   *bool // New flag for latest snapshot
+	delayMsFlag          *int
+	latestSnapshotFlag   *bool
+	retryAttemptsFlag    *int // New flag for retries
+	retryDelayMsFlag     *int // New flag for retry delay
 )
 
 func main() {
@@ -53,6 +55,8 @@ func main() {
 	noErrorFilterFlag = flag.Bool("no-err", false, "Filter out 'not found' and error results")
 	delayMsFlag = flag.Int("d", 0, "Delay in milliseconds between each request sent by a worker")
 	latestSnapshotFlag = flag.Bool("latest", false, "Get the latest snapshot instead of the oldest")
+	retryAttemptsFlag = flag.Int("r", 3, "Number of retry attempts on 429/network errors")
+	retryDelayMsFlag = flag.Int("rd", 5000, "Delay in milliseconds between retries")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: timetraveller [options] <url1> [url2 ...]\n")
@@ -98,7 +102,7 @@ func main() {
 	// Start workers
 	for i := 0; i < *numWorkersFlag; i++ {
 		wg.Add(1)
-		go worker(i+1, httpClient, jobs, resultsChan, &wg, *delayMsFlag)
+		go worker(i+1, httpClient, jobs, resultsChan, &wg, *delayMsFlag, *retryAttemptsFlag, *retryDelayMsFlag)
 	}
 
 	// Send jobs
@@ -149,10 +153,10 @@ func main() {
 	}
 }
 
-func worker(id int, client *http.Client, urls <-chan string, results chan<- ProcessResult, wg *sync.WaitGroup, delayMs int) {
+func worker(id int, client *http.Client, urls <-chan string, results chan<- ProcessResult, wg *sync.WaitGroup, delayMs int, retryAttempts int, retryDelayMs int) {
 	defer wg.Done()
 	for targetURL := range urls {
-		results <- fetchURLData(client, targetURL, *latestSnapshotFlag)
+		results <- fetchURLData(client, targetURL, *latestSnapshotFlag, retryAttempts, retryDelayMs)
 		if delayMs > 0 {
 			time.Sleep(time.Duration(delayMs) * time.Millisecond)
 		}
@@ -160,7 +164,7 @@ func worker(id int, client *http.Client, urls <-chan string, results chan<- Proc
 }
 
 // Modify fetchURLData to accept latest flag and act accordingly
-func fetchURLData(client *http.Client, targetURL string, latest bool) ProcessResult {
+func fetchURLData(client *http.Client, targetURL string, latest bool, retryAttempts int, retryDelayMs int) ProcessResult {
 	result := ProcessResult{URL: targetURL}
 
 	apiURL, err := url.Parse(cdxAPIURL)
@@ -176,19 +180,48 @@ func fetchURLData(client *http.Client, targetURL string, latest bool) ProcessRes
 	query.Set("filter", "statuscode:200")
 	apiURL.RawQuery = query.Encode()
 
-	req, err := http.NewRequest("GET", apiURL.String(), nil)
-	if err != nil {
-		result.Status = "error"
-		result.Error = fmt.Errorf("error creating request: %w", err)
-		return result
+	var resp *http.Response
+	var lastErr error
+
+	for attempt := 0; attempt <= retryAttempts; attempt++ {
+		req, err := http.NewRequest("GET", apiURL.String(), nil)
+		if err != nil {
+			result.Status = "error"
+			result.Error = fmt.Errorf("error creating request: %w", err)
+			return result
+		}
+
+		resp, err = client.Do(req)
+		if err != nil {
+			lastErr = err // Network error
+			if attempt < retryAttempts {
+				time.Sleep(time.Duration(retryDelayMs) * time.Millisecond)
+				continue
+			}
+			result.Status = "error"
+			result.Error = fmt.Errorf("error fetching data after %d retries: %w", retryAttempts, lastErr)
+			return result
+		}
+
+		// Check for 429 Too Many Requests
+		if resp.StatusCode == http.StatusTooManyRequests {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			lastErr = fmt.Errorf("API request failed with status 429 Too Many Requests. Body: %s", string(bodyBytes))
+			if attempt < retryAttempts {
+				time.Sleep(time.Duration(retryDelayMs) * time.Millisecond)
+				continue
+			}
+			result.Status = "error"
+			result.Error = lastErr
+			return result
+		}
+
+		// If we reach here, we have a response that is not a network error and not a 429.
+		// Break the loop and process it.
+		break
 	}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		result.Status = "error"
-		result.Error = fmt.Errorf("error fetching data: %w", err)
-		return result
-	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
