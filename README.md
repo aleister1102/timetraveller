@@ -1,118 +1,98 @@
 # 🕰️ TimeTraveller
 
-TimeTraveller is a command-line tool to interact with the Wayback Machine (archive.org) CDX API. It allows you to check for archived snapshots of one or more URLs, retrieve the count of available snapshots, and get a link to the oldest or newest one.
+TimeTraveller is a command-line tool written in Go to interact with the Wayback Machine (archive.org) CDX API. It allows you to check for archived snapshots of one or more URLs, retrieve the count of available snapshots, and get a link to the oldest or newest one.
 
 ## ✨ Features
 
--   ✅ Check single or multiple URLs.
--    Piping accepted: Accept URLs from command-line arguments or piped via stdin.
--   🔢 Display count of snapshots and link to the **oldest or newest** snapshot for found URLs.
--   ⚙️ Customizable number of concurrent workers (threads).
--   ⏱️ Customizable timeout for HTTP requests.
--   ⏳ Optional delay between requests to be polite to the API.
--   🗑️ Filter out "not found" and error results.
--   🌈 Colored output for easy readability.
+-   **Check single or multiple URLs**: Pass URLs directly as arguments.
+-   **Piped Input**: Accepts a list of URLs from stdin, perfect for chaining with other tools.
+-   **Oldest or Latest**: Retrieve either the very first or the most recent snapshot.
+-   **Concurrency**: Use multiple goroutines (threads) to process URLs in parallel, making it fast.
+-   **Resilience**: Automatically retries on network errors or server-side issues (like 429s or 5xx) with an exponential backoff strategy.
+-   **Filtering**: Option to hide "not found" and error messages to only show successful results.
+-   **File Output**: Save all found snapshot URLs directly to a file.
+-   **Colored Output**: Status indicators are color-coded for quick and easy visual parsing.
 
 ## 🛠️ Installation
 
 ### Prerequisites
 
--   Go (version 1.16 or later recommended).
+-   Go (version 1.18 or later is recommended).
 
-### Building from source
+### Building from Source
 
-1.  Clone this repository or download the source code.
-2.  Navigate to the `timetraveller` directory:
+1.  Clone the repository:
     ```bash
+    git clone https://github.com/your-username/timetraveller.git
     cd timetraveller
     ```
-3.  Build the executable:
+2.  Build the executable:
     ```bash
-    go build
+    go build .
     ```
-    This will create a `timetraveller` (or `timetraveller.exe` on Windows) executable in the current directory.
+    This creates a `timetraveller` (or `timetraveller.exe` on Windows) executable in the directory.
 
-### Install from GitHub (using `go install`)
+## 🚀 Usage
 
-If you have Go installed and configured correctly (specifically, your `GOPATH/bin` or `GOBIN` directory is in your system's `PATH`), you can install TimeTraveller directly from GitHub:
+You can pass URLs as command-line arguments or pipe them from another command's output.
 
-```shell
-go install github.com/aleister1102/timetraveller@latest
-```
-
-**Note:** Replace `aleister1102/timetraveller` with the actual path to your repository if it's hosted on GitHub. If it's a local project not yet on GitHub, this method won't apply until it is.
-After installation, the `timetraveller` binary should be available globally in your terminal.
-
-## Usage
-
-```
-./timetraveller [options] <url1> [url2 ...]
-```
-
-Or, using pipe:
-
+**Basic Syntax:**
 ```bash
-echo "example.com" | ./timetraveller [options]
-cat list_of_urls.txt | ./timetraveller [options]
+./timetraveller [OPTIONS] [url1] [url2]...
 ```
 
-(Where `list_of_urls.txt` contains one URL per line)
+**Piping from a file:**
+```bash
+cat list_of_urls.txt | ./timetraveller [OPTIONS]
+```
 
 ### ⚙️ Options
 
-```
-  -d int
-    	Delay in milliseconds between each request sent by a worker (default 0)
-  -latest
-    	Get the latest snapshot instead of the oldest
-  -no-err
-    	Filter out 'not found' and error results
-  -t int
-    	Number of concurrent goroutines (threads) (default 10)
-  -to int
-    	Timeout for each HTTP request in milliseconds (default 10000)
-```
+| Flag      | Description                                                    | Default |
+|-----------|----------------------------------------------------------------|---------|
+| `-t`      | Number of concurrent goroutines (threads) to use.              | `10`    |
+| `-to`     | Timeout for each HTTP request in milliseconds.                 | `60000` |
+| `-d`      | Delay in milliseconds between each request sent by a worker.   | `0`     |
+| `-latest` | Get the latest snapshot instead of the oldest.                 | `false` |
+| `-no-err` | Filter out 'not found' and error results from the output.      | `false` |
+| `-o`      | File to write found snapshot URLs to.                          | `""`    |
+
 
 ### 🎨 Output Format
 
-The tool uses colored prefixes to indicate the status:
+The tool uses colored prefixes to indicate the status of each URL:
 
--   `[+] <URL> - Snapshots: <count> - Oldest: <link_to_snapshot>` (Green: URL found with snapshots, shows oldest by default)
--   `[+] <URL> - Snapshots: <count> - Latest: <link_to_snapshot>` (Green: URL found with snapshots, shows latest if `-latest` is used)
--   `[-] <URL>` (Yellow: URL not found in archive or no snapshots with HTTP 200)
--   `[!] <URL> - <error_details>` (Red: An error occurred while processing the URL)
-
-If the `-no-err` flag is used, only `[+]` results will be shown.
+-   `[+]` (Green): A snapshot was successfully found.
+-   `[-]` (Yellow): The URL was not found in the archive or had no valid snapshots.
+-   `[!]` (Red): An error occurred during processing. This could be a network issue or an API error after multiple retries.
 
 ### 📝 Examples
 
-1.  **Check a single URL (gets oldest snapshot by default):**
+1.  **Check a single URL for its oldest snapshot:**
     ```bash
-    ./timetraveller google.com
+    ./timetraveller example.com
     ```
 
-2.  **Check a single URL and get the latest snapshot:**
+2.  **Check a URL for its latest snapshot:**
     ```bash
-    ./timetraveller -latest google.com
+    ./timetraveller -latest example.com
     ```
 
-3.  **Check multiple URLs with 5 workers, a 2-second timeout, and get latest snapshots:**
+3.  **Check multiple URLs with 20 workers and a 10-second timeout:**
     ```bash
-    ./timetraveller -t 5 -to 2000 -latest google.com example.com
+    ./timetraveller -t 20 -to 10000 google.com github.com
     ```
 
-4.  **Check URLs from a file, with a 500ms delay, get oldest, and hide 'not found'/'error' results:**
+4.  **Check URLs from a file and save the found snapshots to `found.txt`:**
     ```bash
-    cat my_urls.txt | ./timetraveller -d 500 -no-err
+    cat my_urls.txt | ./timetraveller -o found.txt
     ```
 
-5.  **Check a URL for timeout error (verbose output):
+5.  **Check URLs from a file, hide errors, and use a 500ms delay between requests:**
     ```bash
-    ./timetraveller -to 500 non_existent_domain_for_timeout.com
+    cat my_urls.txt | ./timetraveller -no-err -d 500
     ```
-    Output might be:
-    `[!] non_existent_domain_for_timeout.com - context deadline exceeded (Client.Timeout exceeded while awaiting headers)`
 
 ## 🤝 Contributing
 
-Feel free to open issues or submit pull requests if you have suggestions or find bugs. 
+Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/your-username/timetraveller/issues). 
